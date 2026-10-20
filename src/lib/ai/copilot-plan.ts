@@ -76,12 +76,18 @@ export function buildCopilotPlan(question: string, hypotheticalFlag: boolean): C
 
   pushIntent(
     intents,
-    /cash flow|surplus|expenses?|spend|burn|budget|monthly flow/.test(lowered),
+    /cash flow|surplus|expenses?|spend|burn|budget|monthly flow|afford|affordable|possible|feasible|can i buy|purchase/.test(
+      lowered,
+    ),
     "cash_flow",
   );
   pushIntent(intents, /debt|emi|loan|credit/.test(lowered), "debt");
   pushIntent(intents, /invest|portfolio|allocation|mutual fund|stock|etf/.test(lowered), "investment");
-  pushIntent(intents, /goal|retire|retirement|house|car|education|target/.test(lowered), "goal");
+  pushIntent(
+    intents,
+    /goal|retire|retirement|house|car|bike|education|target|buy|purchase|save for/.test(lowered),
+    "goal",
+  );
   pushIntent(intents, /emergency|runway|buffer/.test(lowered), "emergency");
   pushIntent(intents, /ratio|dti|savings rate|expense to income/.test(lowered), "ratios");
 

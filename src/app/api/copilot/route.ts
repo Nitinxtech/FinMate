@@ -25,7 +25,12 @@ export async function POST(request: NextRequest) {
       payload.attachments.reduce((sum, item) => sum + estimateTokensFromText(item.content), 0) +
       payload.webpages.reduce((sum, item) => sum + estimateTokensFromText(item.content), 0);
 
-    const estimatedTokens = estimateTokensFromText(payload.question) + untrustedTokens;
+    const historyTokens = payload.history.reduce(
+      (sum, item) => sum + estimateTokensFromText(item.content),
+      0,
+    );
+
+    const estimatedTokens = estimateTokensFromText(payload.question) + untrustedTokens + historyTokens;
     if (estimatedTokens > 3500) {
       return Response.json(
         {

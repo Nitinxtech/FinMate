@@ -30,6 +30,7 @@ type CopilotServiceDeps = {
 
 type ModelInput = {
   question: string;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
   plan: CopilotPlan;
   profileContext: Record<string, unknown> | null;
   toolResult: ReturnType<typeof runCopilotDeterministicTools>;
@@ -65,7 +66,14 @@ function buildFallbackNarrative(toolResult: ReturnType<typeof runCopilotDetermin
 } {
   const answer =
     toolResult.calculations.length > 0
-      ? "I used your profile data and deterministic calculators to answer this. See the structured calculations below."
+      ? [
+          "Here is a simple plan based on your profile data.",
+          toolResult.clarifyingQuestions.length > 0
+            ? "I can make this more accurate after you answer a couple of follow-up questions below."
+            : "You already have enough data for a useful first draft plan.",
+        ]
+          .filter(Boolean)
+          .join(" ")
       : "I could not compute a reliable answer from the current profile data. Please review the clarifying questions.";
 
   return {
@@ -101,6 +109,8 @@ async function generateNarrativeWithGemini(input: ModelInput): Promise<{
     "6) If input is missing, suggest precise clarifying next steps.",
     "QUESTION:",
     input.question,
+    "CHAT_HISTORY:",
+    JSON.stringify(input.history),
     "PLAN:",
     JSON.stringify(input.plan),
     "PROFILE_CONTEXT:",
@@ -135,11 +145,19 @@ export async function runFinancialCopilot(
   const runTools = deps.runTools ?? runCopilotDeterministicTools;
   const generateNarrative = deps.generateNarrative ?? generateNarrativeWithGemini;
 
-  const plan = buildCopilotPlan(context.request.question, context.request.hypothetical);
+  const historyUserTurns = context.request.history
+    .filter((item) => item.role === "user")
+    .map((item) => item.content.trim())
+    .filter((item) => item.length > 0)
+    .slice(-8);
+
+  const planningQuestion = [...historyUserTurns, context.request.question].join("\n");
+
+  const plan = buildCopilotPlan(planningQuestion, context.request.hypothetical);
   const profileContext = await loadProfileContext(context.supabase, context.user, plan.requiredFields);
   let toolResult: ReturnType<typeof runCopilotDeterministicTools>;
   try {
-    toolResult = runTools(plan.intents, profileContext ?? {}, plan.asksForScenario);
+    toolResult = runTools(plan.intents, profileContext ?? {}, plan.asksForScenario, planningQuestion);
   } catch {
     return copilotResponseSchema.parse({
       status: "error",
@@ -167,6 +185,30 @@ export async function runFinancialCopilot(
   }
 
   if (toolResult.clarifyingQuestions.length > 0) {
+    const hasCriticalInputGap = toolResult.clarifyingQuestions.some((question) =>
+      /monthly take-home salary|monthly income|gross salary/.test(question.toLowerCase()),
+    );
+
+    if (toolResult.calculations.length > 0 && !hasCriticalInputGap) {
+      const narrative = buildFallbackNarrative(toolResult);
+
+      return copilotResponseSchema.parse({
+        status: "ok",
+        answer: narrative.answer,
+        facts,
+        estimates: toolResult.estimates,
+        assumptions: toolResult.assumptions,
+        hypotheticalScenarios: toolResult.hypotheticalScenarios,
+        calculations: toolResult.calculations,
+        sources: toolResult.sources,
+        risks: narrative.risks,
+        nextSteps: Array.from(new Set([...narrative.nextSteps, ...toolResult.clarifyingQuestions])).slice(0, 6),
+        clarifyingQuestions: toolResult.clarifyingQuestions,
+        uncertainty:
+          "Some decision inputs are still missing, so this is a guided estimate rather than a fully personalized final plan.",
+      });
+    }
+
     const response = copilotResponseSchema.parse({
       status: "needs_clarification",
       answer:
@@ -202,6 +244,7 @@ export async function runFinancialCopilot(
   try {
     narrative = await generateNarrative({
       question: context.request.question,
+      history: context.request.history,
       plan,
       profileContext: (profileContext ?? {}) as Record<string, unknown>,
       toolResult,

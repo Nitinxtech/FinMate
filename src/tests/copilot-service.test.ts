@@ -7,12 +7,18 @@ const user = { id: "user-1" } as User;
 const supabase = {} as never;
 
 function buildRequest(overrides: Partial<CopilotRequest> = {}): CopilotRequest {
-  return {
+  const merged = {
     question: "How is my cash flow this month?",
     hypothetical: false,
     attachments: [],
     webpages: [],
+    history: [],
     ...overrides,
+  };
+
+  return {
+    ...merged,
+    history: merged.history ?? [],
   };
 }
 

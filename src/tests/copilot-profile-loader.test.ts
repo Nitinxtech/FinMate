@@ -24,7 +24,11 @@ describe("loadCopilotProfileContext", () => {
     ]);
 
     expect(from).toHaveBeenCalledWith("financial_profiles");
-    expect(select).toHaveBeenCalledWith("currency_code,monthly_take_home_salary");
+    const selectArg = (select.mock.calls[0]?.[0] ?? "") as string;
+    expect(selectArg).toContain("currency_code");
+    expect(selectArg).toContain("monthly_take_home_salary");
+    expect(selectArg).toContain("goals");
+    expect(selectArg).toContain("debts");
     expect(eq).toHaveBeenCalledWith("user_id", "auth-user-123");
     expect(result?.currency_code).toBe("USD");
   });

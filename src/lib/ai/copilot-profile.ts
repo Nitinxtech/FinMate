@@ -28,17 +28,32 @@ function toSafeArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+const COPILOT_PROFILE_SELECT = [
+  "country_code",
+  "currency_code",
+  "employment_type",
+  "ctc_annual",
+  "monthly_gross_salary",
+  "monthly_take_home_salary",
+  "monthly_expenses",
+  "monthly_savings_target",
+  "debts",
+  "insurances",
+  "investments",
+  "goals",
+  "onboarding_completed",
+].join(",");
+
 export async function loadCopilotProfileContext(
   supabase: SupabaseClient<Database>,
   user: User,
   fields: ProfileField[],
 ): Promise<CopilotProfileContext | null> {
-  const uniqueFields = Array.from(new Set(fields));
-  const select = uniqueFields.join(",");
+  void fields;
 
   const { data, error } = await supabase
     .from("financial_profiles")
-    .select(select)
+    .select(COPILOT_PROFILE_SELECT)
     .eq("user_id", user.id)
     .maybeSingle();
 
