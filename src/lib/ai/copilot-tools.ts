@@ -1,7 +1,6 @@
-import {
+﻿import {
   analyzeInvestmentAllocation,
   calculateEmergencyFundCoverage,
-  calculateLoanEmi,
   calculateMonthlyCashFlow,
   calculateRequiredMonthlyContribution,
   computeBasicFinancialRatios,
@@ -9,7 +8,8 @@ import {
 } from "@/lib/finance/engine";
 import type { CopilotIntent } from "@/lib/ai/copilot-plan";
 import type { CopilotProfileContext } from "@/lib/ai/copilot-profile";
-import type { CopilotCalculation } from "@/lib/ai/copilot-schemas";
+import { buildPurchasePlan, detectPurchaseItem, looksLikePurchase } from "@/lib/ai/copilot-purchase-plan";
+import type { CopilotCalculation, CopilotPurchasePlan } from "@/lib/ai/copilot-schemas";
 
 type ExpenseItem = { category?: string; amount?: number };
 type DebtItem = { lender?: string; monthlyPayment?: number };
@@ -26,72 +26,109 @@ export type CopilotToolResult = {
   clarifyingQuestions: string[];
   sources: string[];
   risks: string[];
+  purchaseClarifiers: string[];
+  purchasePlan: CopilotPurchasePlan | null;
+  snapshot: CopilotSnapshot;
 };
 
-function parseTargetAmountFromQuestion(question: string): number | null {
-  const lowered = question.toLowerCase();
-  const isPurchaseIntent = /buy|purchase|cost|budget|target|save for|afford/.test(lowered);
-  if (!isPurchaseIntent) {
+export type CopilotSnapshot = {
+  currencyCode: string;
+  monthlyIncome: number;
+  monthlyExpenses: number;
+  monthlyDebt: number;
+  monthlyInsurance: number;
+  monthlyInvestments: number;
+  monthlySurplus: number;
+  emergencyMonths: number | null;
+  emergencyTarget: number | null;
+  emergencyShortfall: number | null;
+};
+
+function lastMatch(text: string, pattern: RegExp): RegExpMatchArray | null {
+  const matches = Array.from(text.matchAll(new RegExp(pattern.source, "g")));
+  return matches.length > 0 ? matches[matches.length - 1] : null;
+}
+
+const AMOUNT = String.raw`(?:₹|rs\.?|inr)?\s*(\d[\d,]*(?:\.\d+)?)\s*(lakhs?|lacs?|crores?|k)?\b`;
+const DOWN_PAYMENT_WORDS = String.raw`down\s?payment`;
+
+function toAmount(raw: string | undefined, unit: string | undefined): number | null {
+  if (!raw) {
     return null;
   }
 
-  const lakhMatch = lowered.match(/(\d+(?:\.\d+)?)\s*lakhs?/);
-  if (lakhMatch) {
-    return Number(lakhMatch[1]) * 100000;
+  const base = Number(raw.replace(/,/g, ""));
+  if (!Number.isFinite(base) || base <= 0) {
+    return null;
   }
 
-  const croreMatch = lowered.match(/(\d+(?:\.\d+)?)\s*crore/);
-  if (croreMatch) {
-    return Number(croreMatch[1]) * 10000000;
+  const scale = /^lakh|^lac/.test(unit ?? "") ? 100_000 : /^crore/.test(unit ?? "") ? 10_000_000 : unit === "k" ? 1_000 : 1;
+  return base * scale;
+}
+
+function latestMatchWithIndex(text: string, source: string): { match: RegExpMatchArray; index: number } | null {
+  const matches = Array.from(text.matchAll(new RegExp(source, "gi")));
+  const last = matches[matches.length - 1];
+  return last ? { match: last, index: last.index ?? 0 } : null;
+}
+
+function stripDownPayment(text: string): string {
+  return text
+    .replace(new RegExp(`${DOWN_PAYMENT_WORDS}(?:\\s*(?:of|is|=|around|about|:|can be))*\\s*${AMOUNT}`, "gi"), " ")
+    .replace(new RegExp(`${AMOUNT}\\s*(?:as\\s*)?(?:a\\s*)?${DOWN_PAYMENT_WORDS}`, "gi"), " ");
+}
+
+function parseTargetAmountFromQuestion(question: string): number | null {
+  const lowered = stripDownPayment(question.toLowerCase());
+  if (!/buy|purchase|cost|budget|target|save for|afford|price/.test(lowered)) {
+    return null;
   }
 
-  const inrMatch = lowered.match(/(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)/);
-  if (inrMatch) {
-    const parsed = Number(inrMatch[1].replace(/,/g, ""));
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  const found = latestMatchWithIndex(lowered, String.raw`(?:₹|rs\.?|inr)\s*(\d[\d,]*(?:\.\d+)?)\s*(lakhs?|lacs?|crores?|k)?\b|(\d+(?:\.\d+)?)\s*(lakhs?|lacs?|crores?)\b`);
+  if (!found) {
+    return null;
   }
 
-  return null;
+  const { match } = found;
+  return match[1] ? toAmount(match[1], match[2]) : toAmount(match[3], match[4]);
 }
 
 function parseDownPaymentFromQuestion(question: string): number | null {
   const lowered = question.toLowerCase();
-  const explicitNumber = lowered.match(
-    /down\s?payment(?:\s*(?:of|is|=|around|about|:))?\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?)/,
+  const forward = latestMatchWithIndex(
+    lowered,
+    `${DOWN_PAYMENT_WORDS}(?:\\s*(?:of|is|=|around|about|:|can be))*\\s*${AMOUNT}`,
   );
-  if (explicitNumber) {
-    const parsed = Number(explicitNumber[1].replace(/,/g, ""));
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  }
+  const reverse = latestMatchWithIndex(lowered, `${AMOUNT}\\s*(?:as\\s*)?(?:a\\s*)?${DOWN_PAYMENT_WORDS}`);
 
-  const lakh = lowered.match(/down\s?payment.*?(\d+(?:\.\d+)?)\s*lakhs?/);
-  if (lakh) {
-    return Number(lakh[1]) * 100000;
-  }
+  const latest = [forward, reverse]
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((a, b) => b.index - a.index)[0];
 
-  return null;
+  return latest ? toAmount(latest.match[1], latest.match[2]) : null;
 }
 
 function parseInterestRateFromQuestion(question: string): number | null {
   const lowered = question.toLowerCase();
-  const rate = lowered.match(/(?:interest\s*rate|rate|apr)\D{0,12}(\d+(?:\.\d+)?)\s*%?/);
-  if (!rate) {
-    return null;
-  }
+  const forward = latestMatchWithIndex(lowered, String.raw`(?:interest\s*rate|rate|apr)\D{0,12}(\d+(?:\.\d+)?)\s*%?`);
+  const reverse = latestMatchWithIndex(lowered, String.raw`(\d+(?:\.\d+)?)\s*%\s*(?:interest|rate|p\.?a\.?|per\s*(?:annum|year))`);
 
-  const parsed = Number(rate[1]);
+  const latest = [forward, reverse]
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((a, b) => b.index - a.index)[0];
+
+  const parsed = latest ? Number(latest.match[1]) : NaN;
   return Number.isFinite(parsed) && parsed > 0 && parsed < 100 ? parsed : null;
 }
-
 function parseHorizonMonthsFromQuestion(question: string): number | null {
   const lowered = question.toLowerCase();
-  const monthMatch = lowered.match(/(\d+)\s*months?/);
+  const monthMatch = lastMatch(lowered, /(\d+)\s*months?/);
   if (monthMatch) {
     const months = Number(monthMatch[1]);
     return Number.isFinite(months) && months > 0 ? months : null;
   }
 
-  const yearMatch = lowered.match(/(\d+)\s*(?:years?|yrs?)/);
+  const yearMatch = lastMatch(lowered, /(\d+)\s*(?:years?|yrs?)/);
   if (yearMatch) {
     const years = Number(yearMatch[1]);
     if (!Number.isFinite(years) || years <= 0) {
@@ -104,41 +141,31 @@ function parseHorizonMonthsFromQuestion(question: string): number | null {
   return null;
 }
 
-function isPurchasePlanningQuestion(question: string): boolean {
-  return /buy|purchase|afford|down\s?payment|emi|loan|vehicle|bike|car|home/.test(
-    question.toLowerCase(),
-  );
-}
-
 function collectPurchaseClarifyingQuestions(args: {
-  question: string;
-  downPayment: number | null;
-  tenureMonths: number | null;
-  interestRatePct: number | null;
+  hasPrice: boolean;
+  priceAssumed: boolean;
+  hasDownPayment: boolean;
+  hasTenure: boolean;
+  hasRate: boolean;
 }): string[] {
-  const lowered = args.question.toLowerCase();
-  const hasDownPayment = args.downPayment !== null || /down\s?payment|upfront|advance/.test(lowered);
-  const hasTenure = args.tenureMonths !== null || /(\d+)\s*(months?|years?|yrs?)|tenure|duration/.test(lowered);
-  const hasRate = args.interestRatePct !== null || /interest\s*rate|rate\s*%|apr/.test(lowered);
-  const hasExtraCosts = /insurance|registration|maintenance|accessories|service\s*cost/.test(lowered);
-
   const clarifiers: string[] = [];
-  if (!hasDownPayment) {
-    clarifiers.push("How much down payment can you make upfront while still keeping emergency reserves intact?");
+  if (!args.hasPrice) {
+    clarifiers.push("What price are you looking at (on-road, if it is a vehicle)?");
+  } else if (args.priceAssumed) {
+    clarifiers.push("Do you know the actual on-road price of the exact variant you want?");
   }
-  if (!hasTenure) {
-    clarifiers.push("What repayment horizon works for you: 12, 24, or 36 months?");
+  if (!args.hasDownPayment) {
+    clarifiers.push("How much can you pay upfront as a down payment?");
   }
-  if (!hasRate) {
-    clarifiers.push("Do you have an expected loan interest-rate range from your lender?");
+  if (!args.hasTenure) {
+    clarifiers.push("How many months do you want to pay EMIs for?");
   }
-  if (!hasExtraCosts) {
-    clarifiers.push("Should I include insurance, registration, and maintenance costs in the total budget?");
+  if (!args.hasRate) {
+    clarifiers.push("Has any bank quoted you an interest rate yet?");
   }
 
   return clarifiers;
 }
-
 function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -185,7 +212,7 @@ export function runCopilotDeterministicTools(
   const questionHorizonMonths = parseHorizonMonthsFromQuestion(userQuestion);
   const questionDownPayment = parseDownPaymentFromQuestion(userQuestion);
   const questionInterestRate = parseInterestRateFromQuestion(userQuestion);
-  const purchasePlanning = isPurchasePlanningQuestion(userQuestion);
+  const purchasePlanning = looksLikePurchase(userQuestion);
 
   const facts: string[] = [];
   const estimates: string[] = [];
@@ -195,6 +222,7 @@ export function runCopilotDeterministicTools(
   const clarifyingQuestions: string[] = [];
   const sources = new Set<string>(["financial_profiles.currency_code"]);
   const risks: string[] = [];
+  let emergencySnapshot: { months: number; target: number; shortfall: number } | null = null;
 
   if (monthlyIncome <= 0) {
     clarifyingQuestions.push(
@@ -255,6 +283,11 @@ export function runCopilotDeterministicTools(
     });
 
     if (emergency.ok) {
+      emergencySnapshot = {
+        months: emergency.value.coverageMonths,
+        target: emergency.value.targetFundAmount,
+        shortfall: emergency.value.shortfall,
+      };
       calculations.push({
         name: "Emergency fund coverage",
         formula: "estimated emergency balance / monthly essential outflow",
@@ -425,67 +458,31 @@ export function runCopilotDeterministicTools(
     }
   }
 
+  let purchasePlan: CopilotPurchasePlan | null = null;
+  let purchaseClarifiers: string[] = [];
   if (purchasePlanning) {
-    const purchaseClarifiers = collectPurchaseClarifyingQuestions({
-      question: userQuestion,
+    const catalogPrice = detectPurchaseItem(userQuestion)?.price ?? null;
+    purchaseClarifiers = collectPurchaseClarifyingQuestions({
+      hasPrice: questionTargetAmount !== null || catalogPrice !== null,
+      priceAssumed: questionTargetAmount === null && catalogPrice !== null,
+      hasDownPayment: questionDownPayment !== null,
+      hasTenure: questionHorizonMonths !== null,
+      hasRate: questionInterestRate !== null,
+    });
+
+    purchasePlan = buildPurchasePlan({
+      text: userQuestion,
+      targetAmount: questionTargetAmount,
+      monthlyIncome,
+      monthlySurplus,
+      monthlyDebt,
+      essentialsMonthly: monthlyExpenses + monthlyDebt,
+      emergencyBalance: num(profile.monthly_savings_target) * 6,
+      currencyCode,
       downPayment: questionDownPayment,
       tenureMonths: questionHorizonMonths,
       interestRatePct: questionInterestRate,
     });
-    for (const clarifier of purchaseClarifiers) {
-      clarifyingQuestions.push(clarifier);
-    }
-
-    if (questionTargetAmount && questionTargetAmount > 0) {
-      const horizonMonths = questionHorizonMonths ?? 12;
-      const safeSurplus = Math.max(0, monthlySurplus);
-      const downPayment = Math.max(0, questionDownPayment ?? questionTargetAmount * 0.3);
-      const interestRate = questionInterestRate ?? 11;
-
-      const cashFirstMonthly = questionTargetAmount / Math.max(1, horizonMonths);
-      calculations.push({
-        name: "Scenario: Cash purchase",
-        formula: "target amount / planning horizon months",
-        result: `Save ${fmtMoney(cashFirstMonthly, currencyCode)} per month for ${horizonMonths} months to buy without financing.`,
-        confidence: "deterministic",
-      });
-
-      const financedPrincipal = Math.max(0, questionTargetAmount - downPayment);
-      const mixedEmi = calculateLoanEmi({
-        principal: financedPrincipal,
-        annualRatePct: interestRate,
-        tenureMonths: Math.max(1, horizonMonths),
-      });
-      if (mixedEmi.ok) {
-        calculations.push({
-          name: "Scenario: Mixed plan",
-          formula: "user down payment + remaining principal financed over chosen tenure",
-          result: `Upfront ${fmtMoney(downPayment, currencyCode)} and EMI ${fmtMoney(mixedEmi.value.monthlyEmi, currencyCode)} for ${horizonMonths} months at ${interestRate}% annual interest.`,
-          confidence: "estimated",
-        });
-      }
-
-      const emiOnly = calculateLoanEmi({
-        principal: questionTargetAmount,
-        annualRatePct: interestRate,
-        tenureMonths: Math.max(36, horizonMonths),
-      });
-      if (emiOnly.ok) {
-        calculations.push({
-          name: "Scenario: EMI-first",
-          formula: "100% financed over longer tenure",
-          result: `Estimated EMI ${fmtMoney(emiOnly.value.monthlyEmi, currencyCode)} for ${Math.max(36, horizonMonths)} months at ${interestRate}% annual interest.`,
-          confidence: "estimated",
-        });
-      }
-
-      if (safeSurplus > 0) {
-        const surplusCoverage = questionTargetAmount / safeSurplus;
-        hypotheticalScenarios.push(
-          `At current surplus (${fmtMoney(safeSurplus, currencyCode)}/month), full-cash purchase runway is about ${surplusCoverage.toFixed(1)} months.`,
-        );
-      }
-    }
   }
 
   if (asksForScenario) {
@@ -505,5 +502,20 @@ export function runCopilotDeterministicTools(
     clarifyingQuestions: Array.from(new Set(clarifyingQuestions)),
     sources: Array.from(sources),
     risks,
+    purchaseClarifiers,
+    purchasePlan,
+    snapshot: {
+      currencyCode,
+      monthlyIncome,
+      monthlyExpenses,
+      monthlyDebt,
+      monthlyInsurance,
+      monthlyInvestments,
+      monthlySurplus,
+      emergencyMonths: emergencySnapshot?.months ?? null,
+      emergencyTarget: emergencySnapshot?.target ?? null,
+      emergencyShortfall: emergencySnapshot?.shortfall ?? null,
+    },
   };
 }
+

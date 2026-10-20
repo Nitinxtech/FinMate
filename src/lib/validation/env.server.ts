@@ -7,7 +7,7 @@ const serverEnvSchema = z.object({
   NEXT_PUBLIC_APP_URL: z.url().optional().default("http://localhost:3000"),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   GEMINI_API_KEY: z.string().optional().default(""),
-  GEMINI_MODEL: z.string().optional().default("gemini-2.0-flash"),
+  GEMINI_MODEL: z.string().optional().default("gemini-flash-latest"),
   GEMINI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(128).max(4096).optional().default(900),
 });
 

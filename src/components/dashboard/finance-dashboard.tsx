@@ -1,8 +1,6 @@
-"use client";
+﻿"use client";
 
 import {
-  AlertTriangle,
-  BarChart3,
   Bot,
   Brain,
   BriefcaseBusiness,
@@ -19,7 +17,6 @@ import {
   Minimize2,
   Maximize2,
   SendHorizontal,
-  Sparkle,
   TrendingUp,
   Wallet,
   X,
@@ -27,7 +24,9 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AssistantResponseView, FormattedText } from "@/components/dashboard/copilot-response";
 import { Input } from "@/components/ui/input";
+import type { CopilotResponse } from "@/lib/ai/copilot-schemas";
 import type { DashboardFinanceModel } from "@/lib/finance/dashboard";
 
 type FinanceDashboardProps = {
@@ -54,47 +53,23 @@ const leftNavItems: NavItem[] = [
   { id: "reports", label: "Reports", icon: <ClipboardList className="size-4" /> },
 ];
 
-type CopilotResponse = {
-  status: "ok" | "needs_clarification" | "error";
-  answer: string;
-  facts: string[];
-  estimates: string[];
-  assumptions: string[];
-  hypotheticalScenarios: string[];
-  risks: string[];
-  nextSteps: string[];
-  clarifyingQuestions: string[];
-  uncertainty: string;
-  calculations: Array<{ name: string; result: string; confidence: "deterministic" | "estimated" }>;
-};
-
 type ChatMessage = {
   role: "user" | "assistant";
   text: string;
   response?: CopilotResponse;
-  animate?: boolean;
 };
 
-type VisualMetric = {
-  label: string;
-  value: number;
-};
+const REQUEST_TIMEOUT_MS = 45_000;
 
-type MoneyMetric = {
-  label: string;
-  value: number;
-};
+const WELCOME_MESSAGE =
+  "Hi! Ask me anything about your money. You can also tell me something you want to buy and I will lay out the best ways to get it.";
 
-type ScenarioCard = {
-  title: string;
-  detail: string;
-  confidence: "deterministic" | "estimated";
-};
+const SUGGESTED_PROMPTS = [
+  "I want to buy a bike for 1.5 lakh. What is the best way?",
+  "Is my emergency fund enough?",
+  "How can I save more every month?",
+];
 
-type BeginnerSummary = {
-  headline: string;
-  bullets: string[];
-};
 
 function formatCurrency(value: number, currencyCode: string): string {
   return new Intl.NumberFormat("en-US", {
@@ -110,136 +85,6 @@ function pct(value: number): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
-}
-
-function extractVisualMetrics(calculations: CopilotResponse["calculations"]): VisualMetric[] {
-  const metrics: VisualMetric[] = [];
-
-  for (const item of calculations) {
-    const pctMatch = item.result.match(/(-?\d+(?:\.\d+)?)\s*%/);
-    if (!pctMatch) {
-      continue;
-    }
-
-    const parsed = Number(pctMatch[1]);
-    if (!Number.isFinite(parsed)) {
-      continue;
-    }
-
-    metrics.push({
-      label: item.name,
-      value: clamp(parsed, 0, 100),
-    });
-  }
-
-  return metrics.slice(0, 3);
-}
-
-function parseCurrencyValue(text: string): number | null {
-  const match = text.match(/(?:₹|\$|€|£)\s*([\d,]+(?:\.\d+)?)/);
-  if (!match) {
-    return null;
-  }
-
-  const parsed = Number(match[1].replace(/,/g, ""));
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function extractMoneyMetrics(calculations: CopilotResponse["calculations"]): MoneyMetric[] {
-  const metrics: MoneyMetric[] = [];
-
-  for (const item of calculations) {
-    const value = parseCurrencyValue(item.result);
-    if (value === null || value <= 0) {
-      continue;
-    }
-
-    metrics.push({ label: item.name, value });
-  }
-
-  return metrics.slice(0, 3);
-}
-
-function dedupeLines(values: string[]): string[] {
-  const seen = new Set<string>();
-  const output: string[] = [];
-
-  for (const value of values) {
-    const normalized = value.trim().toLowerCase();
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-
-    seen.add(normalized);
-    output.push(value.trim());
-  }
-
-  return output;
-}
-
-function friendlyLabel(label: string): string {
-  const lowered = label.toLowerCase();
-  if (lowered.includes("debt-to-income")) {
-    return "Loan burden";
-  }
-  if (lowered.includes("savings ratio")) {
-    return "Monthly savings strength";
-  }
-  if (lowered.includes("emergency fund coverage")) {
-    return "Emergency safety buffer";
-  }
-  if (lowered.includes("monthly cash flow")) {
-    return "Money left each month";
-  }
-
-  return label;
-}
-
-function deriveBeginnerSummary(response: CopilotResponse): BeginnerSummary {
-  const calcText = response.calculations.map((item) => `${item.name} ${item.result}`).join(" ").toLowerCase();
-  const bullets: string[] = [];
-
-  const surplusMatch = calcText.match(/₹\s*([\d,]+(?:\.\d+)?)\s*surplus/);
-  if (surplusMatch) {
-    bullets.push(`You currently have about ₹${surplusMatch[1]} left each month after your regular expenses.`);
-  }
-
-  const dtiCalc = response.calculations.find((item) => item.name.toLowerCase().includes("debt-to-income"));
-  const dtiPct = dtiCalc?.result.match(/(\d+(?:\.\d+)?)%/)?.[1];
-  if (dtiPct) {
-    bullets.push(`Your current loan burden is ${dtiPct}% of your monthly income.`);
-  }
-
-  const emergencyCalc = response.calculations.find((item) => item.name.toLowerCase().includes("emergency fund coverage"));
-  const emergencyMonths = emergencyCalc?.result.match(/(\d+(?:\.\d+)?)\s*months?/)?.[1];
-  if (emergencyMonths) {
-    bullets.push(`Your emergency savings can cover around ${emergencyMonths} months of essential costs.`);
-  }
-
-  if (bullets.length === 0) {
-    bullets.push("This plan is based on your income, expenses, debt, and savings details from onboarding.");
-  }
-
-  let headline = "You are in a stable position, but there is room to optimize.";
-  if (response.status === "needs_clarification") {
-    headline = "This is a good first estimate; a couple of answers from you will make it more accurate.";
-  }
-  if (response.risks.some((risk) => /deficit|low|constrained/i.test(risk))) {
-    headline = "There are early warning signs, so take the next steps before making a big purchase.";
-  }
-
-  return { headline, bullets: bullets.slice(0, 3) };
-}
-
-function extractScenarioCards(calculations: CopilotResponse["calculations"]): ScenarioCard[] {
-  return calculations
-    .filter((item) => item.name.toLowerCase().startsWith("scenario:"))
-    .map((item) => ({
-      title: item.name.replace(/^scenario:\s*/i, ""),
-      detail: item.result,
-      confidence: item.confidence,
-    }))
-    .slice(0, 3);
 }
 
 function scoreFromModel(data: DashboardFinanceModel): number {
@@ -263,11 +108,7 @@ export function FinanceDashboard({
   const [isChatExpanded, setIsChatExpanded] = useState(true);
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      text: "I am your finance copilot. Ask me about savings, debt, goals, and monthly planning.",
-      animate: false,
-    },
+    { role: "assistant", text: WELCOME_MESSAGE },
   ]);
   const [copilotError, setCopilotError] = useState<string | null>(null);
   const [isAsking, setIsAsking] = useState(false);
@@ -286,14 +127,7 @@ export function FinanceDashboard({
     { value: clamp(100 - debtShare, 0, 100), color: "#8b5cf6" },
   ];
 
-  const suggestedPrompts = useMemo(
-    () => [
-      "How much should I allocate monthly to hit my top goal faster?",
-      "How can I reduce debt burden without hurting my investments?",
-      "What should I adjust this month to improve emergency coverage?",
-    ],
-    [],
-  );
+  const suggestedPrompts = useMemo(() => SUGGESTED_PROMPTS, []);
 
   useEffect(() => {
     if (!isChatOpen || !chatScrollRef.current) {
@@ -305,6 +139,24 @@ export function FinanceDashboard({
       behavior: "smooth",
     });
   }, [chatMessages, isAsking, isChatOpen]);
+
+  async function sendMessage(rawPrompt: string) {
+    const prompt = rawPrompt.trim();
+    if (prompt.length < 5) {
+      setCopilotError("Ask a slightly longer question (at least 5 characters).");
+      return;
+    }
+
+    setChatMessages((current) => [...current, { role: "user", text: prompt }]);
+    setChatInput("");
+
+    const result = await askCopilot(prompt);
+    if (!result) {
+      return;
+    }
+
+    setChatMessages((current) => [...current, { role: "assistant", text: result.answer, response: result }]);
+  }
 
   async function askCopilot(rawPrompt: string): Promise<CopilotResponse | null> {
     const trimmed = rawPrompt.trim();
@@ -318,16 +170,17 @@ export function FinanceDashboard({
 
     const history = chatMessages
       .slice(-10)
-      .map((message) => ({ role: message.role, content: message.text }))
+      .map((message) => ({ role: message.role, content: message.text.slice(0, 1000) }))
       .filter((item) => item.content.trim().length > 0);
 
     try {
       const response = await fetch("/api/copilot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
           question: trimmed,
-          hypothetical: true,
+          hypothetical: false,
           attachments: [],
           webpages: [],
           history,
@@ -344,8 +197,13 @@ export function FinanceDashboard({
       }
 
       return body;
-    } catch {
-      setCopilotError("Unable to reach AI service. Please retry in a few seconds.");
+    } catch (error) {
+      const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+      setCopilotError(
+        timedOut
+          ? "That took too long. Please send it again."
+          : "Unable to reach AI service. Please retry in a few seconds.",
+      );
       return null;
     } finally {
       setIsAsking(false);
@@ -647,10 +505,10 @@ export function FinanceDashboard({
 
       {isChatOpen ? (
         <div
-          className={`fixed bottom-24 right-6 z-40 rounded-2xl border border-slate-200 bg-white shadow-2xl transition-all ${
+          className={`fixed bottom-24 right-6 z-40 flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl transition-all ${
             isChatExpanded
-              ? "h-[min(82vh,760px)] w-[min(96vw,700px)]"
-              : "h-[min(78vh,620px)] w-[min(96vw,520px)]"
+              ? "h-[min(86vh,820px)] w-[min(96vw,760px)]"
+              : "h-[min(78vh,620px)] w-[min(96vw,480px)]"
           }`}
         >
           <div className="flex items-center justify-between border-b border-slate-200 bg-gradient-to-r from-slate-900 to-cyan-900 px-4 py-3 text-white">
@@ -678,17 +536,25 @@ export function FinanceDashboard({
             </div>
           </div>
 
-          <div ref={chatScrollRef} className="h-[calc(100%-150px)] space-y-2 overflow-y-auto bg-slate-50 p-3">
+          <div ref={chatScrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-3">
             {chatMessages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[92%] rounded-2xl px-3 py-2 text-sm ${
+                  className={`rounded-2xl px-3.5 py-2.5 text-[13px] ${
                     message.role === "user"
-                      ? "rounded-br-sm bg-cyan-600 text-white"
-                      : "rounded-bl-sm border border-slate-200 bg-white text-slate-800"
+                      ? "max-w-[85%] rounded-br-sm bg-cyan-600 text-white"
+                      : message.response?.plan
+                        ? "w-full rounded-bl-sm bg-transparent p-0 text-slate-800"
+                        : "max-w-[92%] rounded-bl-sm border border-slate-200 bg-white text-slate-800"
                   }`}
                 >
-                  <TypewriterText text={message.text} animate={message.role === "assistant" && Boolean(message.animate)} />
+                  {message.response?.plan ? (
+                    <div className="rounded-2xl rounded-bl-sm border border-slate-200 bg-white px-3.5 py-2.5">
+                      <FormattedText text={message.text} />
+                    </div>
+                  ) : (
+                    <FormattedText text={message.text} />
+                  )}
                   {message.response ? <AssistantResponseView response={message.response} /> : null}
                 </div>
               </div>
@@ -703,13 +569,13 @@ export function FinanceDashboard({
 
           <div className="space-y-2 border-t border-slate-200 bg-white p-3">
             <div className="flex max-w-full gap-1.5 overflow-x-auto pb-1">
-              {suggestedPrompts.slice(0, 2).map((prompt) => (
+              {suggestedPrompts.map((prompt) => (
                 <button
                   key={prompt}
                   type="button"
                   disabled={isAsking}
-                  onClick={() => setChatInput(prompt)}
-                  className="whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600 transition hover:border-cyan-200 hover:bg-cyan-50 hover:text-cyan-700"
+                  onClick={() => void sendMessage(prompt)}
+                  className="whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-600 transition hover:border-cyan-200 hover:bg-cyan-50 hover:text-cyan-700 disabled:opacity-50"
                 >
                   {prompt}
                 </button>
@@ -718,31 +584,9 @@ export function FinanceDashboard({
 
             <form
               className="flex items-center gap-2"
-              onSubmit={async (event) => {
+              onSubmit={(event) => {
                 event.preventDefault();
-                const prompt = chatInput.trim();
-                if (prompt.length < 5) {
-                  setCopilotError("Ask a slightly longer question (at least 5 characters).");
-                  return;
-                }
-
-                setChatMessages((current) => [...current, { role: "user", text: prompt }]);
-                setChatInput("");
-
-                const result = await askCopilot(prompt);
-                if (!result) {
-                  return;
-                }
-
-                setChatMessages((current) => [
-                  ...current,
-                  {
-                    role: "assistant",
-                    text: result.answer,
-                    response: result,
-                    animate: true,
-                  },
-                ]);
+                void sendMessage(chatInput);
               }}
             >
               <Input
@@ -825,191 +669,16 @@ function FlowRow({ label, value, width, currencyCode, color }: FlowRowProps) {
   );
 }
 
-function AssistantResponseView({ response }: { response: CopilotResponse }) {
-  const metrics = extractVisualMetrics(response.calculations);
-  const moneyMetrics = extractMoneyMetrics(response.calculations);
-  const scenarioCards = extractScenarioCards(response.calculations);
-  const summary = deriveBeginnerSummary(response);
-  const maxMoneyMetric = Math.max(...moneyMetrics.map((metric) => metric.value), 1);
-  const clarifying = dedupeLines(response.clarifyingQuestions).slice(0, 4);
-  const riskNotes = dedupeLines(response.risks).filter(
-    (risk) => !/inputs may be incomplete/i.test(risk),
-  );
-  const actionPlan = dedupeLines(response.nextSteps).filter(
-    (step) => !clarifying.some((question) => question.toLowerCase() === step.toLowerCase()),
-  );
-  const shouldShowClarifying = response.status === "needs_clarification" || clarifying.length > 0;
-
-  return (
-    <div className="mt-2 space-y-2 text-xs">
-      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5">
-        <p className="mb-1 font-semibold text-emerald-800">What this means for you</p>
-        <p className="text-emerald-900">{summary.headline}</p>
-        <div className="mt-1.5 space-y-1 text-emerald-900">
-          {summary.bullets.map((bullet) => (
-            <p key={bullet}>- {bullet}</p>
-          ))}
-        </div>
-      </div>
-
-      {response.calculations.length > 0 ? (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-          <p className="mb-1 flex items-center gap-1 font-semibold text-slate-600">
-            <BarChart3 className="size-3.5" />
-            Key numbers used
-          </p>
-          <div className="space-y-1.5">
-            {response.calculations.slice(0, 3).map((item) => (
-              <div key={item.name} className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
-                <p className="font-medium text-slate-800">{friendlyLabel(item.name)}</p>
-                <p className="text-slate-600">{item.result}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {scenarioCards.length > 0 ? (
-        <div className="rounded-xl border border-sky-100 bg-sky-50/70 p-2.5">
-          <p className="mb-1 font-semibold text-sky-700">Scenario Compare</p>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {scenarioCards.map((scenario) => (
-              <div key={scenario.title} className="rounded-lg border border-sky-200 bg-white p-2">
-                <p className="text-[11px] font-semibold text-slate-800">{scenario.title}</p>
-                <p className="mt-1 text-[11px] text-slate-600">{scenario.detail}</p>
-                <span className="mt-2 inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-500">
-                  {scenario.confidence}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {moneyMetrics.length > 1 ? (
-        <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-2.5">
-          <p className="mb-1 font-semibold text-indigo-700">Simple comparison</p>
-          <div className="space-y-1.5">
-            {moneyMetrics.map((metric, index) => {
-              const width = (metric.value / maxMoneyMetric) * 100;
-              return (
-                <div key={metric.label}>
-                  <div className="mb-1 flex items-center justify-between text-slate-600">
-                    <span>{friendlyLabel(metric.label)}</span>
-                    <span className="font-medium text-slate-800">{Math.round(metric.value).toLocaleString()}</span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-indigo-100">
-                    <div
-                      className={`h-full rounded-full ${
-                        index === 0 ? "bg-indigo-500" : index === 1 ? "bg-cyan-500" : "bg-emerald-500"
-                      }`}
-                      style={{ width: `${clamp(width, 8, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {metrics.length > 0 ? (
-        <div className="rounded-xl border border-cyan-100 bg-cyan-50/60 p-2.5">
-          <p className="mb-1 flex items-center gap-1 font-semibold text-cyan-700">
-            <Sparkle className="size-3.5" />
-            Visual Indicators
-          </p>
-          <div className="space-y-1.5">
-            {metrics.map((metric) => (
-              <div key={metric.label}>
-                <div className="mb-1 flex items-center justify-between text-slate-600">
-                  <span>{friendlyLabel(metric.label)}</span>
-                  <span className="font-medium text-slate-800">{metric.value.toFixed(1)}%</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-cyan-100">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-500"
-                    style={{ width: `${metric.value}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {shouldShowClarifying ? (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-2.5">
-          <p className="mb-1 font-semibold text-amber-700">Questions to refine this plan</p>
-          <div className="space-y-1 text-amber-900">
-            {clarifying.map((question) => (
-              <p key={question}>- {question}</p>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {actionPlan.length > 0 ? (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5">
-          <p className="mb-1 font-semibold text-emerald-700">Recommended next steps</p>
-          <div className="space-y-1 text-emerald-900">
-            {actionPlan.slice(0, 3).map((step) => (
-              <p key={step}>- {step}</p>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {riskNotes.length > 0 ? (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-2.5">
-          <p className="mb-1 flex items-center gap-1 font-semibold text-rose-700">
-            <AlertTriangle className="size-3.5" />
-            Watchouts
-          </p>
-          <div className="space-y-1 text-rose-900">
-            {riskNotes.slice(0, 2).map((risk) => (
-              <p key={risk}>- {risk}</p>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function AssistantTypingSkeleton() {
   return (
-    <div className="rounded-2xl rounded-bl-sm border border-slate-200 bg-white p-3">
-      <div className="animate-pulse space-y-2">
-        <div className="h-3 w-2/3 rounded bg-slate-200" />
-        <div className="h-3 w-5/6 rounded bg-slate-200" />
-        <div className="h-3 w-1/2 rounded bg-slate-200" />
-        <div className="mt-3 h-16 rounded-xl border border-slate-100 bg-slate-100" />
+    <div className="rounded-2xl rounded-bl-sm border border-slate-200 bg-white px-3.5 py-3">
+      <div className="flex items-center gap-1.5">
+        <span className="size-2 animate-bounce rounded-full bg-cyan-500 [animation-delay:-0.3s]" />
+        <span className="size-2 animate-bounce rounded-full bg-cyan-500 [animation-delay:-0.15s]" />
+        <span className="size-2 animate-bounce rounded-full bg-cyan-500" />
+        <span className="ml-1 text-xs text-slate-500">Working out your options...</span>
       </div>
     </div>
   );
-}
-
-function TypewriterText({ text, animate = false }: { text: string; animate?: boolean }) {
-  const [visible, setVisible] = useState(() => (animate ? "" : text));
-
-  useEffect(() => {
-    if (!animate) {
-      return;
-    }
-
-    let i = 0;
-    const timer = setInterval(() => {
-      i += 1;
-      setVisible(text.slice(0, i));
-      if (i >= text.length) {
-        clearInterval(timer);
-      }
-    }, 12);
-
-    return () => clearInterval(timer);
-  }, [animate, text]);
-
-  return <p>{visible}</p>;
 }
 

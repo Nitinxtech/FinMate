@@ -29,7 +29,7 @@ export const copilotNarrativeSchema = z.object({
   answer: z.string().trim().min(1).max(2400),
   risks: z.array(z.string().trim().min(1).max(240)).max(6).default([]),
   nextSteps: z.array(z.string().trim().min(1).max(240)).max(6).default([]),
-  uncertainty: z.string().trim().min(1).max(420),
+  uncertainty: z.string().trim().max(420).default(""),
 });
 
 export type CopilotNarrative = z.infer<typeof copilotNarrativeSchema>;
@@ -42,6 +42,60 @@ export const copilotCalculationSchema = z.object({
 });
 
 export type CopilotCalculation = z.infer<typeof copilotCalculationSchema>;
+
+export const copilotRoadmapSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  tag: z.enum(["recommended", "safest", "fastest", "costly"]).optional(),
+  fit: z.enum(["comfortable", "tight", "stretch"]),
+  upfront: z.number(),
+  monthly: z.number(),
+  months: z.number(),
+  monthsToOwn: z.number(),
+  totalCost: z.number(),
+  extraCost: z.number(),
+  pros: z.array(z.string()),
+  cons: z.array(z.string()),
+  steps: z.array(z.string()),
+});
+
+export const copilotReadinessSchema = z.object({
+  readyNow: z.boolean(),
+  readyInMonths: z.number(),
+  maxPriceToday: z.number(),
+  comfortableEmi: z.number(),
+  standardEmi: z.number(),
+  standardTenure: z.number(),
+  incomeNow: z.number(),
+  incomeNeeded: z.number(),
+  runningCost: z.number(),
+  steps: z.array(z.object({ title: z.string(), detail: z.string(), months: z.number() })),
+  checks: z.array(
+    z.object({
+      label: z.string(),
+      haveText: z.string(),
+      needText: z.string(),
+      progress: z.number(),
+      status: z.enum(["ok", "warn", "bad"]),
+    }),
+  ),
+});
+
+export const copilotPurchasePlanSchema = z.object({
+  itemLabel: z.string(),
+  targetAmount: z.number(),
+  priceAssumed: z.boolean(),
+  monthlySurplus: z.number(),
+  currencyCode: z.string(),
+  inputs: z.array(z.object({ label: z.string(), value: z.string(), assumed: z.boolean() })),
+  readiness: copilotReadinessSchema,
+  roadmaps: z.array(copilotRoadmapSchema).min(1),
+  recommendedId: z.string(),
+  takeaway: z.string(),
+});
+
+export type CopilotPurchasePlan = z.infer<typeof copilotPurchasePlanSchema>;
 
 export const copilotResponseSchema = z.object({
   status: z.enum(["ok", "needs_clarification", "error"]),
@@ -56,6 +110,7 @@ export const copilotResponseSchema = z.object({
   nextSteps: z.array(z.string()).default([]),
   clarifyingQuestions: z.array(z.string()).default([]),
   uncertainty: z.string().default(""),
+  plan: copilotPurchasePlanSchema.optional(),
 });
 
 export type CopilotResponse = z.infer<typeof copilotResponseSchema>;
