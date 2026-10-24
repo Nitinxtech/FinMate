@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense, type ReactNode } from "react";
-import { ClipboardList, LayoutDashboard, User2 } from "lucide-react";
+import { ClipboardList, FileText, LayoutDashboard, User2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createSupabaseServerClient } from "@/lib/db/supabase-server";
 import { signOutAction } from "@/features/profile/actions";
@@ -52,6 +52,7 @@ function LayoutFrame({ children, shouldShowOnboardingNav = false }: LayoutFrameP
             {shouldShowOnboardingNav ? (
               <NavPill href="/dashboard/onboarding" label="Onboarding" icon={<ClipboardList className="size-4" />} />
             ) : null}
+            <NavPill href="/dashboard/policies" label="Policies" icon={<FileText className="size-4" />} />
             <NavPill href="/dashboard/profile" label="Profile" icon={<User2 className="size-4" />} />
           </div>
           <form action={signOutAction}>

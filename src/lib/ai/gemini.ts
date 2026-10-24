@@ -12,6 +12,7 @@ type GeminiGenerateOptions = {
   temperature?: number;
   responseMimeType?: "text/plain" | "application/json";
   timeoutMs?: number;
+  inlineData?: Array<{ mimeType: string; dataBase64: string }>;
 };
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -38,7 +39,16 @@ export async function generateTextWithGemini(
         "x-goog-api-key": env.GEMINI_API_KEY,
       },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [
+          {
+            parts: [
+              ...(options.inlineData ?? []).map((item) => ({
+                inline_data: { mime_type: item.mimeType, data: item.dataBase64 },
+              })),
+              { text: prompt },
+            ],
+          },
+        ],
         generationConfig: {
           maxOutputTokens: options.maxOutputTokens ?? env.GEMINI_MAX_OUTPUT_TOKENS,
           temperature: options.temperature ?? 0.2,
